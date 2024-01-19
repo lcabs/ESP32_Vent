@@ -1,0 +1,280 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <time.h>
+#include <ArduinoJson.h>
+
+const char* ssid = "EG8115V5";
+const char* password = "alpha147147";
+const char* mqtt_server = "192.168.18.186";
+const char* ntp_server = "pool.ntp.org";
+const char* mqtt_username = "esp32_vent";
+const char* mqtt_password = "alpha147147";
+
+const int LED_PIN = 2;
+const int FRACO_PIN = 16;
+const int MEDIO_PIN = 17;
+const int FORTE_PIN = 18;
+
+const int BUTTON_PIN_0 = 14;
+const int BUTTON_PIN_1 = 12;
+const int BUTTON_PIN_2 = 13;
+const int BUTTON_PIN_3 = 15;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+bool isConnected = false;
+bool buttonStateChanged = false;
+bool relayStateChanged = false;
+//bool mqttPayloadReceived = false;
+
+bool lastButtonState[4] = {false, false, false, false};
+bool lastRelayState[3] = {false, false, false};
+
+void turnOffAllRelays() {
+  digitalWrite(FRACO_PIN, LOW);
+  digitalWrite(MEDIO_PIN, LOW);
+  digitalWrite(FORTE_PIN, LOW);
+}
+
+void publishVentState() {
+  DynamicJsonDocument jsonDoc(256);
+  jsonDoc["button0"] = digitalRead(BUTTON_PIN_0);
+  jsonDoc["button1"] = digitalRead(BUTTON_PIN_1);
+  jsonDoc["button2"] = digitalRead(BUTTON_PIN_2);
+  jsonDoc["button3"] = digitalRead(BUTTON_PIN_3);
+  jsonDoc["relayFraco"] = digitalRead(FRACO_PIN);
+  jsonDoc["relayMedio"] = digitalRead(MEDIO_PIN);
+  jsonDoc["relayForte"] = digitalRead(FORTE_PIN);
+  jsonDoc["isConnected"] = isConnected;
+
+  String jsonString;
+  serializeJson(jsonDoc, jsonString);
+
+  // Publish only if there's a change in button state, relay state, or an MQTT payload has been received
+  if (buttonStateChanged || relayStateChanged){ //|| mqttPayloadReceived) {
+    client.publish("lcabs1993/ESP32/Vent", jsonString.c_str());
+    buttonStateChanged = false;
+    relayStateChanged = false;
+    //mqttPayloadReceived = false;
+  }
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+
+  // Set the flag indicating an MQTT payload has been received
+  //mqttPayloadReceived = true;
+
+  Serial.print("Received message on topic: ");
+  Serial.println(topic);
+
+  payload[length] = '\0'; // Null-terminate the payload
+  String payloadStr = String((char*)payload);
+
+  Serial.println("Payload: " + payloadStr);
+
+  // Blink the LED on GPIO 2
+  digitalWrite(LED_PIN, HIGH);
+  delay(200);  // Adjust the blink duration as needed
+  digitalWrite(LED_PIN, LOW);
+
+  // Check if the payload corresponds to controlling relays
+  if (String(topic) == "lcabs1993/ESP32/Fraco") {
+    // Control Fraco
+    if (payloadStr == "on") {
+      digitalWrite(MEDIO_PIN, LOW);
+      digitalWrite(FORTE_PIN, LOW);
+      digitalWrite(FRACO_PIN, HIGH);
+    } else if (payloadStr == "off") {
+      digitalWrite(FRACO_PIN, LOW);
+      digitalWrite(MEDIO_PIN, LOW);
+      digitalWrite(FORTE_PIN, LOW);
+    }
+  } else if (String(topic) == "lcabs1993/ESP32/Médio") {
+    // Control Médio
+    if (payloadStr == "on") {
+      digitalWrite(FRACO_PIN, LOW);
+      digitalWrite(FORTE_PIN, LOW);
+      digitalWrite(MEDIO_PIN, HIGH);
+    } else if (payloadStr == "off") {
+      digitalWrite(FRACO_PIN, LOW);
+      digitalWrite(MEDIO_PIN, LOW);
+      digitalWrite(FORTE_PIN, LOW);
+    }
+  } else if (String(topic) == "lcabs1993/ESP32/Forte") {
+    // Control Forte
+    if (payloadStr == "on") {
+      digitalWrite(FRACO_PIN, LOW);
+      digitalWrite(MEDIO_PIN, LOW);
+      digitalWrite(FORTE_PIN, HIGH);
+    } else if (payloadStr == "off") {
+      digitalWrite(FRACO_PIN, LOW);
+      digitalWrite(MEDIO_PIN, LOW);
+      digitalWrite(FORTE_PIN, LOW);
+    }
+  }
+}
+
+
+void blinkLED() {
+  digitalWrite(LED_PIN, HIGH);
+  delay(10);
+  digitalWrite(LED_PIN, LOW);
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.println("Reconnect: Attempting MQTT connection...");
+
+    if (client.connect("ESP32Client", mqtt_username, mqtt_password)) {
+      Serial.println("Reconnect: Connected to MQTT broker");
+      isConnected = true; // Set isConnected to true on successful connection
+
+      // Blink the LED rapidly for three cycles
+      for (int i = 0; i < 10; i++) {
+        blinkLED();
+        delay(100);
+      }
+
+      // Get and adjust timeinfo if needed
+      struct tm timeinfo;
+      getLocalTime(&timeinfo);
+      timeinfo.tm_hour -= 3;
+
+      char isoTime[20];
+      strftime(isoTime, sizeof(isoTime), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+
+      String connectionMessage = "Successfully connected to MQTT broker at " + String(isoTime);
+      client.publish("lcabs1993/ESP32", connectionMessage.c_str());
+
+      // Subscribe to relays topics
+      client.subscribe("lcabs1993/ESP32/Fraco");
+      client.subscribe("lcabs1993/ESP32/Médio");
+      client.subscribe("lcabs1993/ESP32/Forte");
+
+    } else {
+      Serial.print("Reconnect: MQTT connection failed, rc=");
+      Serial.println(client.state());
+      isConnected = false; // Set isConnected to false on failed connection
+      delay(2000);
+    }
+  }
+}
+
+void publishSensorData(const char* sensorName, int sensorValue) {
+  String topic = "lcabs1993/ESP32/" + String(sensorName);
+  client.publish(topic.c_str(), String(sensorValue).c_str());
+
+  // Construct JSON object
+  DynamicJsonDocument jsonDoc(256);
+  jsonDoc["topic"] = sensorName;
+  jsonDoc["payload"] = sensorValue;
+  jsonDoc["qos"] = 0;
+
+  // Serialize JSON to a String
+  String jsonString;
+  serializeJson(jsonDoc, jsonString);
+
+  // Print JSON to serial monitor
+  Serial.println(jsonString);
+
+  blinkLED();
+}
+
+void checkButtonStateChanges() {
+  bool currentButtonState[4] = {
+    digitalRead(BUTTON_PIN_0),
+    digitalRead(BUTTON_PIN_1),
+    digitalRead(BUTTON_PIN_2),
+    digitalRead(BUTTON_PIN_3)
+  };
+
+  for (int i = 0; i < 4; ++i) {
+    if (currentButtonState[i] != lastButtonState[i]) {
+      buttonStateChanged = true;
+      lastButtonState[i] = currentButtonState[i];
+    }
+  }
+}
+
+void checkRelayStateChanges() {
+  bool currentRelayState[3] = {
+    digitalRead(FRACO_PIN),
+    digitalRead(MEDIO_PIN),
+    digitalRead(FORTE_PIN)
+  };
+
+  for (int i = 0; i < 3; ++i) {
+    if (currentRelayState[i] != lastRelayState[i]) {
+      relayStateChanged = true;
+      lastRelayState[i] = currentRelayState[i];
+    }
+  }
+}
+
+bool checkMultipleButtonsOn() {
+  int count = 0;
+
+  for (int i = 0; i < 4; ++i) {
+    if (digitalRead(BUTTON_PIN_0 + i) == HIGH) {
+      count++;
+    }
+  }
+
+  return count > 1;
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Setup: Starting...");
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Setup: Connecting to WiFi...");
+  }
+  Serial.println("Setup: Connected to WiFi");
+  isConnected = true; // Set isConnected to true when WiFi is connected
+
+  configTime(0, 0, "pool.ntp.org");
+
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
+  pinMode(FRACO_PIN, OUTPUT);
+  pinMode(MEDIO_PIN, OUTPUT);
+  pinMode(FORTE_PIN, OUTPUT);
+
+  // Initial state: Relays are turned off
+  turnOffAllRelays();
+
+  pinMode(BUTTON_PIN_0, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_1, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_2, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_3, INPUT_PULLUP);
+
+  pinMode(LED_PIN, OUTPUT);
+
+  Serial.println("Setup: Completed.");
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  checkButtonStateChanges();
+  checkRelayStateChanges();
+
+  if (checkMultipleButtonsOn()) {
+    // If more than one button is on, keep all relays off
+    turnOffAllRelays();
+    relayStateChanged = true;
+  }
+
+  publishVentState(); // Publish button and relay state
+
+  delay(50);
+}
