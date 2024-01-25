@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <ArduinoJson.h>
 
 const char* ssid = "EG8115V5";
 const char* password = "alpha147147";
@@ -26,7 +27,7 @@ void updateRelays();
 void turnOffAllRelays();
 void activateRelay(int relayNumber);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
-void publishDebugMessage(const String& message);
+void publishDebugMessage();
 
 void setup() {
   Serial.begin(115200);
@@ -64,7 +65,7 @@ void loop() {
       if (buttonState == HIGH) {
         selectedSpeed = i;
         updateRelays();
-        publishDebugMessage("Button press detected. Selected speed: " + String(selectedSpeed));
+        publishDebugMessage();
       }
     }
   }
@@ -110,7 +111,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (speed >= 0 && speed <= 3) {
       selectedSpeed = speed;
       updateRelays();
-      publishDebugMessage("MQTT message received. Selected speed: " + String(selectedSpeed));
+      publishDebugMessage();
     }
   }
 }
@@ -152,6 +153,34 @@ void activateRelay(int relayNumber) {
   }
 }
 
-void publishDebugMessage(const String& message) {
-  client.publish(mqtt_debug_topic, message.c_str());
+void publishDebugMessage() {
+
+ // Create a JSON object
+  StaticJsonDocument<200> jsonDocument;
+
+  // Add button states to JSON
+  JsonArray buttonStatesArray = jsonDocument.createNestedArray("buttonStates");
+  for (int i = 0; i < 4; i++) {
+    buttonStatesArray.add(buttonStates[i]);
+  }
+
+  // Add selected speed to JSON
+  jsonDocument["selectedSpeed"] = selectedSpeed;
+
+  // Add relay states to JSON
+  JsonArray relayStatesArray = jsonDocument.createNestedArray("relayStates");
+  for (int i = 0; i < 3; i++) {
+    relayStatesArray.add(digitalRead(relayPins[i]));
+  }
+
+  // Convert JSON to string
+  String jsonString;
+  serializeJson(jsonDocument, jsonString);
+
+  // Publish the JSON string
+  client.publish("lcabs1993/ESP32/Vent/Json", jsonString.c_str());
+
+  // Publish the debug message
+ // client.publish(mqtt_debug_topic,message.c_str());
+
 }
