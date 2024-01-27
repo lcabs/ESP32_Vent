@@ -35,7 +35,7 @@ void setup() {
   setupWiFi();
   setupMQTT();
 
-  // Initialize button pins as inputs
+  // Initialize button pins as inputs 
   for (int i = 0; i < 4; i++) {
     pinMode(buttonPins[i], INPUT_PULLUP);
   }
@@ -44,6 +44,7 @@ void setup() {
   for (int i = 0; i < 3; i++) {
     pinMode(relayPins[i], OUTPUT);
   }
+  turnOffAllRelays();
 }
 
 void loop() {
@@ -62,7 +63,7 @@ void loop() {
       buttonStates[i] = buttonState;
 
       // If button state is HIGH (active), update selectedSpeed
-      if (buttonState == HIGH) {
+      if (buttonState == LOW) {
         selectedSpeed = i;
         updateRelays();
         publishDebugMessage();
@@ -70,7 +71,7 @@ void loop() {
     }
   }
 
-  delay(50); // Wait for 50 milliseconds
+ // delay(50); // Wait for 50 milliseconds
 }
 
 void setupWiFi() {
@@ -124,14 +125,17 @@ void updateRelays() {
       break;
     case 1:
       turnOffAllRelays();
+      delay(200); // Wait for 50 milliseconds
       activateRelay(1);
       break;
     case 2:
       turnOffAllRelays();
+      delay(200); // Wait for 50 milliseconds
       activateRelay(2);
       break;
     case 3:
       turnOffAllRelays();
+      delay(200); // Wait for 50 milliseconds
       activateRelay(3);
       break;
     default:
@@ -142,14 +146,14 @@ void updateRelays() {
 void turnOffAllRelays() {
   // Turn off all relays
   for (int i = 0; i < 3; i++) {
-    digitalWrite(relayPins[i], LOW);
+    digitalWrite(relayPins[i], HIGH);
   }
 }
 
 void activateRelay(int relayNumber) {
   // Activate the specified relay
   if (relayNumber >= 1 && relayNumber <= 3) {
-    digitalWrite(relayPins[relayNumber - 1], HIGH);
+    digitalWrite(relayPins[relayNumber - 1], LOW);
   }
 }
 
