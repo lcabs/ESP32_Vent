@@ -10,6 +10,7 @@ const char* mqtt_username = "esp32_vent";
 const char* mqtt_password = "alpha147147";
 const char* mqtt_topic = "lcabs1993/ESP32/Vent";
 const char* mqtt_debug_topic = "lcabs1993/ESP32/Vent/debug";
+bool mqttConnected = false; // Variable to track MQTT connection status
 
 const int buttonPins[] = {14, 12, 13, 15}; // Pins for buttons
 const int relayPins[] = {16, 17, 18};      // Pins for relays
@@ -49,6 +50,7 @@ void setup() {
 
 void loop() {
   if (!client.connected()) {
+    mqttConnected = false;
     reconnectMQTT();
   }
 
@@ -66,7 +68,9 @@ void loop() {
       if (buttonState == LOW) {
         selectedSpeed = i;
         updateRelays();
-        publishDebugMessage();
+        if (mqttConnected) { // Check if MQTT is connected
+          publishDebugMessage();
+        }
       }
     }
   }
@@ -93,6 +97,7 @@ void reconnectMQTT() {
   while (!client.connected()) {
     Serial.println("Attempting MQTT connection...");
     if (client.connect("ESP32Client", mqtt_username, mqtt_password)) {
+      mqttConnected = true;
       Serial.println("Connected to MQTT");
       client.subscribe(mqtt_topic);
     } else {
