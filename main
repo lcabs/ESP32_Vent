@@ -10,13 +10,13 @@ const char* mqtt_username = "esp32_vent";
 const char* mqtt_password = "alpha147147";
 const char* mqtt_topic = "lcabs1993/ESP32/Vent";
 const char* mqtt_debug_topic = "lcabs1993/ESP32/Vent/debug";
-bool mqttConnected = false; // Variable to track MQTT connection status
+const int buttonPins[] = {14, 12, 13, 15};
+const int relayPins[] = {16, 17, 18};
+const int DEBOUNCE_DELAY = 50;
 
-const int buttonPins[] = {14, 12, 13, 15}; // Pins for buttons
-const int relayPins[] = {16, 17, 18};      // Pins for relays
-
-int buttonStates[4] = {0, 0, 0, 0};     // Array to store button states
-int selectedSpeed = -1;                  // Variable to store the selected speed
+bool mqttConnected = false;
+int buttonStates[4] = {0, 0, 0, 0};
+int selectedSpeed = -1;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -36,15 +36,14 @@ void setup() {
   setupWiFi();
   setupMQTT();
 
-  // Initialize button pins as inputs 
   for (int i = 0; i < 4; i++) {
     pinMode(buttonPins[i], INPUT_PULLUP);
   }
 
-  // Initialize relay pins as outputs
   for (int i = 0; i < 3; i++) {
     pinMode(relayPins[i], OUTPUT);
   }
+
   turnOffAllRelays();
 }
 
@@ -56,26 +55,23 @@ void loop() {
 
   client.loop();
 
-  // Read the state of each button
   for (int i = 0; i < 4; i++) {
     int buttonState = digitalRead(buttonPins[i]);
 
-    // Check if the button state has changed
     if (buttonState != buttonStates[i]) {
       buttonStates[i] = buttonState;
 
-      // If button state is HIGH (active), update selectedSpeed
       if (buttonState == LOW) {
         selectedSpeed = i;
         updateRelays();
-        if (mqttConnected) { // Check if MQTT is connected
+        if (mqttConnected) {
           publishDebugMessage();
         }
       }
     }
   }
 
- // delay(50); // Wait for 50 milliseconds
+  delay(DEBOUNCE_DELAY);
 }
 
 void setupWiFi() {
@@ -110,7 +106,7 @@ void reconnectMQTT() {
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  payload[length] = '\0'; // Null-terminate the payload
+  payload[length] = '\0';
 
   if (strcmp(topic, mqtt_topic) == 0) {
     int speed = atoi((char*)payload);
@@ -123,73 +119,42 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void updateRelays() {
-  // Control relays based on the selected speed
-  switch (selectedSpeed) {
-    case 0:
-      turnOffAllRelays();
-      break;
-    case 1:
-      turnOffAllRelays();
-      delay(200); // Wait for 50 milliseconds
-      activateRelay(1);
-      break;
-    case 2:
-      turnOffAllRelays();
-      delay(200); // Wait for 50 milliseconds
-      activateRelay(2);
-      break;
-    case 3:
-      turnOffAllRelays();
-      delay(200); // Wait for 50 milliseconds
-      activateRelay(3);
-      break;
-    default:
-      break;
+  turnOffAllRelays();
+  if (selectedSpeed >= 1 && selectedSpeed <= 3) {
+    delay(DEBOUNCE_DELAY);
+    activateRelay(selectedSpeed);
   }
 }
 
 void turnOffAllRelays() {
-  // Turn off all relays
   for (int i = 0; i < 3; i++) {
     digitalWrite(relayPins[i], HIGH);
   }
 }
 
 void activateRelay(int relayNumber) {
-  // Activate the specified relay
   if (relayNumber >= 1 && relayNumber <= 3) {
     digitalWrite(relayPins[relayNumber - 1], LOW);
   }
 }
 
 void publishDebugMessage() {
-
- // Create a JSON object
   StaticJsonDocument<200> jsonDocument;
 
-  // Add button states to JSON
   JsonArray buttonStatesArray = jsonDocument.createNestedArray("buttonStates");
   for (int i = 0; i < 4; i++) {
     buttonStatesArray.add(buttonStates[i]);
   }
 
-  // Add selected speed to JSON
   jsonDocument["selectedSpeed"] = selectedSpeed;
 
-  // Add relay states to JSON
   JsonArray relayStatesArray = jsonDocument.createNestedArray("relayStates");
   for (int i = 0; i < 3; i++) {
     relayStatesArray.add(digitalRead(relayPins[i]));
   }
 
-  // Convert JSON to string
   String jsonString;
   serializeJson(jsonDocument, jsonString);
 
-  // Publish the JSON string
   client.publish("lcabs1993/ESP32/Vent/Json", jsonString.c_str());
-
-  // Publish the debug message
- // client.publish(mqtt_debug_topic,message.c_str());
-
 }
