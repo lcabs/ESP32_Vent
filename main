@@ -9,30 +9,38 @@ const char* mqtt_server = "192.168.18.186";
 const char* mqtt_username = "esp32_vent";
 const char* mqtt_password = "alpha147147";
 const char* mqtt_topic = "lcabs1993/ESP32/Vent";
-const char* mqtt_debug_topic = "lcabs1993/ESP32/Vent/debug";
 const int buttonPins[] = {14, 12, 13, 15};
 const int relayPins[] = {16, 17, 18};
-const int DEBOUNCE_DELAY = 50;
+const int DEBOUNCE_DELAY = 50 / portTICK_PERIOD_MS;
+const int ledPin = 2;  // Onboard LED pin
 
+bool ledState = false;  // For blinking
 bool mqttConnected = false;
+bool wifiPreviouslyConnected = true;
 int buttonStates[4] = {0, 0, 0, 0};
 int selectedSpeed = -1;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+unsigned long lastReconnectAttempt = 0;
+const int RECONNECT_INTERVAL = 5000 / portTICK_PERIOD_MS;
+
 void setupWiFi();
 void setupMQTT();
-void reconnectMQTT();
+bool reconnectMQTT();
 void updateRelays();
 void turnOffAllRelays();
 void activateRelay(int relayNumber);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void publishDebugMessage();
+void mqttTask(void *parameter);
+void buttonTask(void *parameter);
 
 void setup() {
-  Serial.begin(115200);
-
+  Serial.begin(9600);
+  Serial.println("Starting ESP32...");
+  pinMode(ledPin, OUTPUT);
   setupWiFi();
   setupMQTT();
 
@@ -45,43 +53,21 @@ void setup() {
   }
 
   turnOffAllRelays();
+
+  // Create FreeRTOS tasks
+  xTaskCreate(mqttTask, "MQTT Task", 4096, NULL, 1, NULL);
+  xTaskCreate(buttonTask, "Button Task", 2048, NULL, 1, NULL);
+
+  digitalWrite(ledPin, LOW);  // TESTE
 }
 
 void loop() {
-  if (!client.connected()) {
-    mqttConnected = false;
-    reconnectMQTT();
-  }
-
-  client.loop();
-
-  for (int i = 0; i < 4; i++) {
-    int buttonState = digitalRead(buttonPins[i]);
-
-    if (buttonState != buttonStates[i]) {
-      buttonStates[i] = buttonState;
-
-      if (buttonState == LOW) {
-        selectedSpeed = i;
-        updateRelays();
-        if (mqttConnected) {
-          publishDebugMessage();
-        }
-      }
-    }
-  }
-
-  delay(DEBOUNCE_DELAY);
+  // Main loop is now empty since tasks handle the work
 }
 
 void setupWiFi() {
-  Serial.println("Connecting to WiFi");
+  Serial.println("Connecting to WiFi...");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  Serial.println("Connected to WiFi");
 }
 
 void setupMQTT() {
@@ -89,20 +75,24 @@ void setupMQTT() {
   client.setCallback(mqttCallback);
 }
 
-void reconnectMQTT() {
-  while (!client.connected()) {
-    Serial.println("Attempting MQTT connection...");
+bool reconnectMQTT() {
+  if (!client.connected()) {
+    Serial.println("Attempting to connect to MQTT...");
     if (client.connect("ESP32Client", mqtt_username, mqtt_password)) {
       mqttConnected = true;
-      Serial.println("Connected to MQTT");
+      Serial.println("Connected to MQTT!");
+      // Publicar mensagem de sucesso
+      client.publish("lcabs1993/ESP32/Vent/status", "connected successfully!!");
       client.subscribe(mqtt_topic);
+      return true;
     } else {
-      Serial.print("Failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" Retrying in 5 seconds...");
-      delay(5000);
+      Serial.print("MQTT connection failed, rc=");
+      Serial.println(client.state());
+      mqttConnected = false;
+      return false;
     }
   }
+  return true;
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -121,20 +111,26 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 void updateRelays() {
   turnOffAllRelays();
   if (selectedSpeed >= 1 && selectedSpeed <= 3) {
-    delay(DEBOUNCE_DELAY);
+    vTaskDelay(DEBOUNCE_DELAY);
     activateRelay(selectedSpeed);
   }
+  Serial.print("Relays updated for selected speed: ");
+  Serial.println(selectedSpeed);
 }
 
 void turnOffAllRelays() {
   for (int i = 0; i < 3; i++) {
     digitalWrite(relayPins[i], HIGH);
   }
+  Serial.println("All relays turned off");
 }
 
 void activateRelay(int relayNumber) {
   if (relayNumber >= 1 && relayNumber <= 3) {
     digitalWrite(relayPins[relayNumber - 1], LOW);
+    Serial.print("Relay ");
+    Serial.print(relayNumber);
+    Serial.println(" activated");
   }
 }
 
@@ -157,4 +153,73 @@ void publishDebugMessage() {
   serializeJson(jsonDocument, jsonString);
 
   client.publish("lcabs1993/ESP32/Vent/Json", jsonString.c_str());
+  Serial.println("Debug message published to MQTT");
+}
+
+void mqttTask(void *parameter) {
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      if (!wifiPreviouslyConnected) {
+        Serial.println("WiFi reconnected.");
+        wifiPreviouslyConnected = true;
+     //   digitalWrite(ledPin, LOW);  //  LED if connected
+      }
+      
+      if (!client.connected()) {
+        digitalWrite(ledPin, HIGH);  //  LED on if connected
+        unsigned long currentTick = xTaskGetTickCount();
+        unsigned long timeToReconnect = (RECONNECT_INTERVAL - (currentTick - lastReconnectAttempt)) * portTICK_PERIOD_MS;
+
+        if (currentTick - lastReconnectAttempt > RECONNECT_INTERVAL) {
+          lastReconnectAttempt = currentTick;
+          if (reconnectMQTT()) {
+            lastReconnectAttempt = 0;
+          
+          }
+        } else {
+          Serial.print("Time remaining for next MQTT reconnect attempt: ");
+          Serial.print(timeToReconnect / 1000); // Print in seconds
+          Serial.println(" seconds");
+          //digitalWrite(ledPin, HIGH);  //
+        }
+      } else {
+        client.loop();
+        digitalWrite(ledPin, LOW);  // 
+      }
+    } else {
+      if (wifiPreviouslyConnected) {
+        Serial.println("WiFi not connected, attempting reconnection...");
+        wifiPreviouslyConnected = false;
+        digitalWrite(ledPin, HIGH);
+      }
+        digitalWrite(ledPin, HIGH);  
+        WiFi.reconnect();
+        vTaskDelay(1000 / portTICK_PERIOD_MS);  // Wait 1 second before retrying
+    }
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Short delay to yield task
+  }
+}
+
+void buttonTask(void *parameter) {
+  for (;;) {
+    for (int i = 0; i < 4; i++) {
+      int buttonState = digitalRead(buttonPins[i]);
+
+      if (buttonState != buttonStates[i]) {
+        buttonStates[i] = buttonState;
+
+        if (buttonState == LOW) {
+          selectedSpeed = i;
+          updateRelays();
+          Serial.print("Button ");
+          Serial.print(i);
+          Serial.println(" pressed");
+          if (mqttConnected) {
+            publishDebugMessage();
+          }
+        }
+      }
+    }
+    vTaskDelay(DEBOUNCE_DELAY); // Debounce delay
+  }
 }
